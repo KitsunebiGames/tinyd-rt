@@ -1,0 +1,12 @@
+name "tinyd-rt"
+description "Tiny D runtime"
+authors "Luna"
+copyright "Copyright © 2024, Luna"
+license "BSD 2-clause"
+
+// GCC Linker Flags
+lflags "-nostdlib" platform="gdc"
+dflags "-nophoboslib" "-ffunction-sections" "-fdata-sections" "-matomic-model=soft-imask" "-ftls-model=local-exec" "-flto" "-m4-single-only" platform="gdc"
+
+// LDC Linker Flags
+lflags "-nostdlib" platform="ldc"
