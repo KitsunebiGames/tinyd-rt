@@ -6,7 +6,17 @@ license "BSD 2-clause"
 
 // GCC Linker Flags
 lflags "-nostdlib" platform="gdc"
-dflags "-nophoboslib" "-ffunction-sections" "-fdata-sections" "-matomic-model=soft-imask" "-ftls-model=local-exec" "-flto" "-m4-single-only" platform="gdc"
+dflags "-nophoboslib" "-ffunction-sections" "-fdata-sections" "-flto" platform="gdc"
 
 // LDC Linker Flags
 lflags "-nostdlib" platform="ldc"
+
+// Default config
+configuration "default" {
+    targetType "autodetect"
+}
+
+// Dreamcast config
+configuration "dreamcast" {
+    dflags "-matomic-model=soft-imask" "-ftls-model=local-exec" "-m4-single-only" platform="gdc"
+}

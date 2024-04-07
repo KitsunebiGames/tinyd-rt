@@ -1578,7 +1578,7 @@ template forward(args...)
 
     alias Result = AliasSeq!();
     static foreach (arg; args)
-        Result = AliasSeq!(Result, fwd!arg);
+        alias Result = AliasSeq!(Result, fwd!arg);
     static if (Result.length == 1)
         alias forward = Result[0];
     else
