@@ -5,6 +5,8 @@
 module object;
 public import core.internal.array.common;
 import mem = core.internal.platform.memory;
+import core.stdc.string;
+import core.lifetime;
 
 alias size_t = typeof(int.sizeof);
 alias ptrdiff_t = typeof(cast(void*) 0 - cast(void*) 0);
@@ -18,6 +20,8 @@ alias equals_t = bool; // For backwards compatibility only.
 alias string = immutable(char)[];
 alias wstring = immutable(wchar)[];
 alias dstring = immutable(dchar)[];
+
+alias _d_newclassT(T) = core.lifetime._d_newclassT!T;
 
 // bare basics class support {
 extern(C) bool _xopEquals(const void*, const void*) { return false; } // assert(0);

@@ -8,7 +8,7 @@ a `__traits(getUnitTests, mixin(__MODULE__))` style test runner.
 Note that just like any other `unittest` in druntime, they will also be compiled
 and executed without `-betterC`.
 */
-package(core) enum betterC = 1;
+enum betterC = 1;
 
 // Basic GCC attribute shenanigans
 
