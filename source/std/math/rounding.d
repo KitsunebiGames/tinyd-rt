@@ -17,7 +17,6 @@ Authors:   $(HTTP digitalmars.com, Walter Bright), Don Clugston,
            Conversion of CEPHES math library to D by Iain Buclaw and David Nadlinger
 Source: $(PHOBOSSRC std/math/rounding.d)
  */
-
 module std.math.rounding;
 
 static import core.math;

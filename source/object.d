@@ -294,6 +294,11 @@ private int __switchSearch(T)( /*in*/ const scope T[][] cases, /*in*/ const scop
     return -1;
 }
 
+void __switch_error()(string file = __FILE__, size_t line = __LINE__) {
+    import core.stdc.stdlib;
+    abort();
+}
+
 //TODO: Support someday?
 extern (C) void _d_throw_exception(Throwable o) {
     assert(false, "Exception throw: " ~ o.file ~ " (" ~ o.message ~ ")");
@@ -680,6 +685,12 @@ T* _d_newitemT(T)() @trusted {
     auto p = _d_newitemU(_ti);
     memset(p, 0, _ti.size);
     return cast(T*) p;
+}
+
+extern(C) void* _d_newitemT(in TypeInfo _ti) {
+    auto p = _d_newitemU(_ti);
+    memset(p, 0, _ti.size);
+    return cast(void*) p;
 }
 
 alias AliasSeq(T...) = T;

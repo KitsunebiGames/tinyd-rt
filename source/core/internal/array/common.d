@@ -134,39 +134,6 @@ void reserve(T)(ref T[] arr, size_t length) @trusted {
 	arr = (cast(T*)(mem.malloc(length * T.sizeof).ptr))[0 .. 0];
 }
 
-void _d_arraybounds(string file, size_t line) {
-
-	version (WebAssembly)
-		arsd.webassembly.eval(
-			q{ console.error("Range error: " + $0 + ":" + $1 )},
-			file, line);
-	else version (CustomRuntimePrinter)
-		customRuntimePrinter("Range Error: ", file, ":", line);
-	abort();
-}
-
-/// Called when an out of range slice of an array is created
-void _d_arraybounds_slice(string file, uint line, size_t lwr, size_t upr, size_t length) {
-	version (WebAssembly)
-		arsd.webassembly.eval(
-			q{ console.error("Range error: " + $0 + ":" + $1 + " [" + $2 + ".." + $3 + "] <> " + $4)},
-			file, line, lwr, upr, length);
-	else version (CustomRuntimePrinter)
-		customRuntimePrinter("Range Error: ", file, ":", line, " [", lwr, "..", upr, "] <> ", length);
-	abort();
-}
-
-/// Called when an out of range array index is accessed
-void _d_arraybounds_index(string file, uint line, size_t index, size_t length) {
-	version (WebAssembly)
-		arsd.webassembly.eval(
-			q{ console.error("Array index " + $0  + " out of bounds '[0.."+$1+"]' " + $2 + ":" + $3)},
-			index, length, file, line);
-	else version (CustomRuntimePrinter)
-		customRuntimePrinter("Array index: ", index, " out of bounds '[0..", length, "]'", file, ":", line);
-	abort();
-}
-
 T[] _d_newarrayU(T)(size_t length, bool isShared = false) pure @trusted {
 	alias PureM = ubyte[]function(size_t sz, string file = __FILE__, size_t line = __LINE__) pure @trusted nothrow;
 	PureM pureMalloc = cast(PureM)&malloc;
@@ -177,6 +144,55 @@ T[] _d_newarrayT(T)(size_t length, bool isShared = false) pure @trusted {
 	auto arr = _d_newarrayU!T(length);
 	(cast(byte[]) arr)[] = 0;
 	return arr;
+}
+
+extern(C) byte[] _d_arraycatT(const TypeInfo ti, byte[] x, byte[] y) {
+    auto sizeelem = ti.next.size;
+	size_t xlen = x.length * sizeelem;
+    size_t ylen = y.length * sizeelem;
+    size_t len  = xlen + ylen;
+
+    if (!len)
+        return null;
+
+	byte* p = cast(byte*)mem.malloc(len);
+	p[len] = 0;
+	memcpy(p, x.ptr, xlen);
+	memcpy(p + xlen, y.ptr, ylen);
+
+	__doPostblit(p, xlen + ylen, ti.next);
+	return p[0 .. x.length + y.length];
+}
+
+extern (C) void[] _d_arraycatnTX(const TypeInfo ti, scope byte[][] arrs) {
+
+    size_t length;
+    auto tinext = unqualify(ti.next);
+    auto size = tinext.size;   // array element size
+
+    foreach (b; arrs)
+        length += b.length;
+
+    if (!length)
+        return null;
+
+    auto allocsize = length * size;
+	void* a = cast(void*)mem.malloc(allocsize);
+
+    size_t j = 0;
+    foreach (b; arrs)
+    {
+        if (b.length)
+        {
+            memcpy(a + j, b.ptr, b.length * size);
+            j += b.length * size;
+        }
+    }
+
+    // do postblit processing
+    __doPostblit(a, j, tinext);
+
+    return a[0..length];
 }
 
 Tret _d_arraycatnTX(Tret, Tarr...)(auto ref Tarr froms) @trusted {
