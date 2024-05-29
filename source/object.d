@@ -534,6 +534,52 @@ void destroy(bool initialize = true, T)(ref T obj)
         obj = T.init;
 }
 
+class TypeInfo_AssociativeArray : TypeInfo
+{
+    override string toString() const
+    {
+        return value.toString() ~ "[" ~ key.toString() ~ "]";
+    }
+
+    override bool equals(in void* p1, in void* p2) @trusted const
+    {
+        return !!_aaEqual(this, *cast(const AA*) p1, *cast(const AA*) p2);
+    }
+
+    override size_t getHash(scope const void* p) nothrow @trusted const
+    {
+        return _aaGetHash(cast(AA*)p, this);
+    }
+
+    override @property size_t size() nothrow pure const
+    {
+        return (char[int]).sizeof;
+    }
+
+    override const(void)[] initializer() const @trusted
+    {
+        return (cast(void *)null)[0 .. (char[int]).sizeof];
+    }
+
+    override @property inout(TypeInfo) next() nothrow pure inout { return value; }
+    override @property uint flags() nothrow pure const { return 1; }
+
+
+    TypeInfo value;
+    TypeInfo key;
+
+    override @property size_t talign() nothrow pure const
+    {
+        return (char[int]).alignof;
+    }
+
+    version (WithArgTypes) override int argTypes(out TypeInfo arg1, out TypeInfo arg2)
+    {
+        arg1 = typeid(void*);
+        return 0;
+    }
+}
+
 class TypeInfo_Pointer : TypeInfo {
     TypeInfo m_next;
 
@@ -680,17 +726,22 @@ extern (C) void* _d_newitemU(scope const TypeInfo _ti) {
     return p.ptr;
 }
 
-T* _d_newitemT(T)() @trusted {
-    TypeInfo _ti = typeid(T);
-    auto p = _d_newitemU(_ti);
-    memset(p, 0, _ti.size);
-    return cast(T*) p;
+static if(__VERSION__ >= 2105)
+{
+    T* _d_newitemT(T)() @trusted {
+        TypeInfo _ti = typeid(T);
+        auto p = _d_newitemU(_ti);
+        memset(p, 0, _ti.size);
+        return cast(T*) p;
+    }
 }
-
-extern(C) void* _d_newitemT(in TypeInfo _ti) {
-    auto p = _d_newitemU(_ti);
-    memset(p, 0, _ti.size);
-    return cast(void*) p;
+else static if(__VERSION__ < 2105)
+{
+    extern(C) void* _d_newitemT(in TypeInfo _ti) {
+        auto p = _d_newitemU(_ti);
+        memset(p, 0, _ti.size);
+        return cast(void*) p;
+    }
 }
 
 alias AliasSeq(T...) = T;
