@@ -3,6 +3,8 @@
 
 */
 module object;
+import core.internal.hash;
+
 public import core.internal.array.common;
 import mem = core.internal.platform.memory;
 import core.stdc.string;
@@ -369,102 +371,6 @@ bool opEquals(const Object lhs, const Object rhs) {
     return opEquals(cast() lhs, cast() rhs);
 }
 
-class TypeInfo {
-    override string toString() const @safe nothrow {
-        return typeid(this).name;
-    }
-
-    const(TypeInfo) next() nothrow pure inout @nogc {
-        return null;
-    }
-
-    size_t size() nothrow pure const @safe @nogc {
-        return 0;
-    }
-
-    bool equals(in void* p1, in void* p2) const {
-        return p1 == p2;
-    }
-
-    override size_t toHash() @trusted const nothrow {
-        return hashOf(this.toString());
-    }
-
-    size_t getHash(scope const void* p) @trusted nothrow const {
-        return hashOf(p);
-    }
-
-    /**
-	* Return default initializer.  If the type should be initialized to all
-	* zeros, an array with a null ptr and a length equal to the type size will
-	* be returned. For static arrays, this returns the default initializer for
-	* a single element of the array, use `tsize` to get the correct size.
-	*/
-    const(void)[] initializer() const @trusted nothrow pure {
-        return (cast(const(void)*) null)[0 .. typeof(null).sizeof];
-    }
-
-    const(OffsetTypeInfo)[] offTi() const {
-        return null;
-    }
-
-    @property uint flags() nothrow pure const @safe @nogc {
-        return 0;
-    }
-    /// Run the destructor on the object and all its sub-objects
-    void destroy(void* p) const {
-    }
-    /// Run the postblit on the object and all its sub-objects
-    void postblit(void* p) const {
-    }
-
-    @property size_t talign() nothrow pure const {
-        return size;
-    }
-}
-
-class TypeInfo_Class : TypeInfo {
-    ubyte[] m_init; /// class static initializer (length gives class size)
-    string name; /// name of class
-    void*[] vtbl; // virtual function pointer table
-    Interface[] interfaces;
-    TypeInfo_Class base;
-    void* destructor;
-    void function(Object) classInvariant;
-    uint flags;
-    void* deallocator;
-    OffsetTypeInfo[] m_offTi;
-    void function(Object) defaultConstructor;
-    immutable(void)* rtInfo;
-
-    override @property size_t size() nothrow pure const {
-        return Object.sizeof;
-    }
-
-    override string toString() const pure {
-        return name;
-    }
-
-    override @property const(OffsetTypeInfo)[] offTi() nothrow pure const {
-        return m_offTi;
-    }
-
-    override size_t getHash(scope const void* p) @trusted const {
-        auto o = *cast(Object*) p;
-        return o ? o.toHash() : 0;
-    }
-
-    override bool equals(in void* p1, in void* p2) const {
-        Object o1 = *cast(Object*) p1;
-        Object o2 = *cast(Object*) p2;
-
-        return (o1 is o2) || (o1 && o1.opEquals(o2));
-    }
-
-    override const(void)[] initializer() nothrow pure const @safe {
-        return m_init;
-    }
-}
 
 void destroy(bool initialize = true, T)(ref T obj) if (is(T == struct)) {
     import core.internal.destruction : destructRecurse;
@@ -475,6 +381,35 @@ void destroy(bool initialize = true, T)(ref T obj) if (is(T == struct)) {
         import core.internal.lifetime : emplaceInitializer;
 
         emplaceInitializer(obj); // emplace T.init
+    }
+}
+
+void destroy(bool initialize = true, T)(T obj) if (is(T == interface)) {
+    static assert(__traits(getLinkage, T) == "D", "Invalid call to destroy() on extern(" ~ __traits(getLinkage, T) ~ ") interface");
+
+    destroy!initialize(cast(Object) obj);
+}
+
+void destroy(bool initialize = true, T)(ref T obj)
+        if (!is(T == struct) && !is(T == interface) && !is(T == class) && !__traits(
+            isStaticArray, T)) {
+    static if (initialize)
+        obj = T.init;
+}
+
+void destroy(bool initialize = true, T)(T obj) if (is(T == class)) {
+    static if (__traits(getLinkage, T) == "C++") {
+        static if (__traits(hasMember, T, "__xdtor"))
+            obj.__xdtor();
+
+        static if (initialize) {
+            const initializer = __traits(initSymbol, T);
+            (cast(void*) obj)[0 .. initializer.length] = initializer[];
+        }
+    } else {
+        // Bypass overloaded opCast
+        auto ptr = (() @trusted => *cast(void**)&obj)();
+        rt_finalize2(ptr, true, initialize);
     }
 }
 
@@ -503,208 +438,6 @@ private extern (C) void rt_finalize2(void* p, bool det = true, bool resetMemory 
 
 extern (C) void _d_callfinalizer(void* p) {
     rt_finalize2(p);
-}
-
-void destroy(bool initialize = true, T)(T obj) if (is(T == class)) {
-    static if (__traits(getLinkage, T) == "C++") {
-        static if (__traits(hasMember, T, "__xdtor"))
-            obj.__xdtor();
-
-        static if (initialize) {
-            const initializer = __traits(initSymbol, T);
-            (cast(void*) obj)[0 .. initializer.length] = initializer[];
-        }
-    } else {
-        // Bypass overloaded opCast
-        auto ptr = (() @trusted => *cast(void**)&obj)();
-        rt_finalize2(ptr, true, initialize);
-    }
-}
-
-void destroy(bool initialize = true, T)(T obj) if (is(T == interface)) {
-    static assert(__traits(getLinkage, T) == "D", "Invalid call to destroy() on extern(" ~ __traits(getLinkage, T) ~ ") interface");
-
-    destroy!initialize(cast(Object) obj);
-}
-
-void destroy(bool initialize = true, T)(ref T obj)
-        if (!is(T == struct) && !is(T == interface) && !is(T == class) && !__traits(
-            isStaticArray, T)) {
-    static if (initialize)
-        obj = T.init;
-}
-
-class TypeInfo_AssociativeArray : TypeInfo
-{
-    override string toString() const
-    {
-        return value.toString() ~ "[" ~ key.toString() ~ "]";
-    }
-
-    override bool equals(in void* p1, in void* p2) @trusted const
-    {
-        return !!_aaEqual(this, *cast(const AA*) p1, *cast(const AA*) p2);
-    }
-
-    override size_t getHash(scope const void* p) nothrow @trusted const
-    {
-        return _aaGetHash(cast(AA*)p, this);
-    }
-
-    override @property size_t size() nothrow pure const
-    {
-        return (char[int]).sizeof;
-    }
-
-    override const(void)[] initializer() const @trusted
-    {
-        return (cast(void *)null)[0 .. (char[int]).sizeof];
-    }
-
-    override @property inout(TypeInfo) next() nothrow pure inout { return value; }
-    override @property uint flags() nothrow pure const { return 1; }
-
-
-    TypeInfo value;
-    TypeInfo key;
-
-    override @property size_t talign() nothrow pure const
-    {
-        return (char[int]).alignof;
-    }
-
-    version (WithArgTypes) override int argTypes(out TypeInfo arg1, out TypeInfo arg2)
-    {
-        arg1 = typeid(void*);
-        return 0;
-    }
-}
-
-class TypeInfo_Pointer : TypeInfo {
-    TypeInfo m_next;
-
-    override bool equals(in void* p1, in void* p2) const {
-        return *cast(void**) p1 == *cast(void**) p2;
-    }
-
-    override size_t getHash(scope const void* p) @trusted const {
-        size_t addr = cast(size_t)*cast(const void**) p;
-        return addr ^ (addr >> 4);
-    }
-
-    override @property size_t size() nothrow pure const {
-        return (void*).sizeof;
-    }
-
-    override const(void)[] initializer() const @trusted {
-        return (cast(void*) null)[0 .. (void*).sizeof];
-    }
-
-    override const(TypeInfo) next() const {
-        return m_next;
-    }
-}
-
-class TypeInfo_Array : TypeInfo {
-    TypeInfo value;
-    override string toString() const {
-        return value.toString() ~ "[]";
-    }
-
-    override size_t size() const {
-        return (void[]).sizeof;
-    }
-
-    override const(TypeInfo) next() const {
-        return value;
-    }
-
-    override bool equals(in void* p1, in void* p2) const {
-        void[] a1 = *cast(void[]*) p1;
-        void[] a2 = *cast(void[]*) p2;
-        if (a1.length != a2.length)
-            return false;
-        size_t sz = value.size;
-        for (size_t i = 0; i < a1.length; i++) {
-            if (!value.equals(a1.ptr + i * sz, a2.ptr + i * sz))
-                return false;
-        }
-        return true;
-    }
-
-    override @property size_t talign() nothrow pure const {
-        return (void[]).alignof;
-    }
-
-    override const(void)[] initializer() const @trusted {
-        return (cast(void*) null)[0 .. (void[]).sizeof];
-    }
-}
-
-class TypeInfo_Tuple : TypeInfo {
-    TypeInfo[] elements;
-}
-
-class TypeInfo_StaticArray : TypeInfo {
-    TypeInfo value;
-    size_t len;
-    override size_t size() const {
-        return value.size * len;
-    }
-
-    override const(TypeInfo) next() const {
-        return value;
-    }
-
-    override bool equals(in void* p1, in void* p2) const {
-        size_t sz = value.size;
-
-        for (size_t u = 0; u < len; u++) {
-            if (!value.equals(p1 + u * sz, p2 + u * sz)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    override @property size_t talign() nothrow pure const {
-        return value.talign;
-    }
-
-}
-
-class TypeInfo_Enum : TypeInfo {
-    TypeInfo base;
-    string name;
-    void[] m_init;
-
-    override size_t size() const {
-        return base.size;
-    }
-
-    override const(TypeInfo) next() const {
-        return base.next;
-    }
-
-    override bool equals(in void* p1, in void* p2) const {
-        return base.equals(p1, p2);
-    }
-
-    override @property size_t talign() const {
-        return base.talign;
-    }
-
-    override void destroy(void* p) const {
-        return base.destroy(p);
-    }
-
-    override void postblit(void* p) const {
-        return base.postblit(p);
-    }
-
-    override const(void)[] initializer() const {
-        return m_init.length ? m_init : base.initializer();
-    }
 }
 
 private size_t structTypeInfoSize(const TypeInfo ti) pure nothrow @nogc {
@@ -804,175 +537,10 @@ static foreach (type; AliasSeq!(bool, byte, char, dchar, double, float, int, lon
 	});
 }
 
-// typeof(null)
-class TypeInfo_n : TypeInfo {
-const:
-pure:
-@nogc:
-nothrow:
-@safe:
-    override string toString() {
-        return "typeof(null)";
-    }
-
-    override size_t getHash(scope const void*) {
-        return 0;
-    }
-
-    override bool equals(in void*, in void*) {
-        return true;
-    }
-
-    override @property size_t size() {
-        return typeof(null).sizeof;
-    }
-
-    override const(void)[] initializer() @trusted {
-        return (cast(void*) null)[0 .. size_t.sizeof];
-    }
-}
-
 struct Interface {
     TypeInfo_Class classinfo;
     void*[] vtbl;
     size_t offset;
-}
-
-/**
- * Array of pairs giving the offset and type information for each
- * member in an aggregate.
- */
-struct OffsetTypeInfo {
-    size_t offset; /// Offset of member from start of object
-    TypeInfo ti; /// TypeInfo for this member
-}
-
-class TypeInfo_Axa : TypeInfo_Aa {
-
-}
-
-class TypeInfo_Aya : TypeInfo_Aa {
-
-}
-
-class TypeInfo_Function : TypeInfo {
-    override string toString() const pure @trusted {
-        return deco;
-    }
-
-    override bool opEquals(Object o) const {
-        if (this is o)
-            return true;
-        auto c = cast(const TypeInfo_Function) o;
-        return c && this.deco == c.deco;
-    }
-
-    // BUG: need to add the rest of the functions
-
-    override @property size_t size() nothrow pure const {
-        return 0; // no size for functions
-    }
-
-    override const(void)[] initializer() const @safe {
-        return null;
-    }
-
-    TypeInfo _next;
-    override const(TypeInfo) next() nothrow pure inout @nogc {
-        return _next;
-    }
-
-    /**
-    * Mangled function type string
-    */
-    string deco;
-}
-
-class TypeInfo_Delegate : TypeInfo {
-    TypeInfo next;
-    string deco;
-    override @property size_t size() nothrow pure const {
-        alias dg = int delegate();
-        return dg.sizeof;
-    }
-
-    override bool equals(in void* p1, in void* p2) const {
-        auto dg1 = *cast(void delegate()*) p1;
-        auto dg2 = *cast(void delegate()*) p2;
-        return dg1 == dg2;
-    }
-
-    override const(void)[] initializer() const @trusted {
-        return (cast(void*) null)[0 .. (int delegate()).sizeof];
-    }
-
-    override size_t getHash(scope const void* p) @trusted const {
-        return hashOf(*cast(const void delegate()*) p);
-    }
-
-    override @property size_t talign() nothrow pure const {
-        alias dg = int delegate();
-        return dg.alignof;
-    }
-}
-
-//Directly copied from LWDR source.
-class TypeInfo_Interface : TypeInfo {
-    TypeInfo_Class info;
-
-    override bool equals(in void* p1, in void* p2) const {
-        Interface* pi = **cast(Interface***)*cast(void**) p1;
-        Object o1 = cast(Object)(*cast(void**) p1 - pi.offset);
-        pi = **cast(Interface***)*cast(void**) p2;
-        Object o2 = cast(Object)(*cast(void**) p2 - pi.offset);
-
-        return o1 == o2 || (o1 && o1.opCmp(o2) == 0);
-    }
-
-    override size_t getHash(scope const void* p) @trusted const {
-        if (!*cast(void**) p) {
-            return 0;
-        }
-        Interface* pi = **cast(Interface***)*cast(void**) p;
-        Object o = cast(Object)(*cast(void**) p - pi.offset);
-        assert(o);
-        return o.toHash();
-    }
-
-    override const(void)[] initializer() const @trusted {
-        return (cast(void*) null)[0 .. Object.sizeof];
-    }
-
-    override @property size_t size() nothrow pure const {
-        return Object.sizeof;
-    }
-}
-
-class TypeInfo_Const : TypeInfo {
-    override size_t getHash(scope const(void*) p) @trusted const nothrow {
-        return base.getHash(p);
-    }
-
-    TypeInfo base;
-    override size_t size() const {
-        return base.size;
-    }
-
-    override const(TypeInfo) next() const {
-        return base.next;
-    }
-
-    override const(void)[] initializer() nothrow pure const {
-        return base.initializer();
-    }
-
-    override @property size_t talign() nothrow pure const {
-        return base.talign;
-    }
-
-    override bool equals(in void* p1, in void* p2) const {
-        return base.equals(p1, p2);
-    }
 }
 
 ///For some reason, getHash for interfaces wanted that
@@ -993,163 +561,6 @@ extern (D) void _d_invariant(Object o) {
         c = c.base;
     }
     while (c);
-}
-
-/+
-class TypeInfo_Immutable : TypeInfo {
-	size_t getHash(in void*) nothrow { return 0; }
-	TypeInfo base;
-}
-+/
-class TypeInfo_Invariant : TypeInfo {
-    TypeInfo base;
-    override size_t getHash(scope const(void*) p) @trusted const nothrow {
-        return base.getHash(p);
-    }
-
-    override size_t size() const {
-        return base.size;
-    }
-
-    override const(TypeInfo) next() const {
-        return base;
-    }
-}
-
-class TypeInfo_Shared : TypeInfo {
-    override size_t getHash(scope const(void*) p) @trusted const nothrow {
-        return base.getHash(p);
-    }
-
-    TypeInfo base;
-    override size_t size() const {
-        return base.size;
-    }
-
-    override const(TypeInfo) next() const {
-        return base;
-    }
-}
-
-class TypeInfo_Inout : TypeInfo {
-    override size_t getHash(scope const(void*) p) @trusted const nothrow {
-        return base.getHash(p);
-    }
-
-    TypeInfo base;
-    override size_t size() const {
-        return base.size;
-    }
-
-    override const(TypeInfo) next() const {
-        return base;
-    }
-}
-
-class TypeInfo_Struct : TypeInfo {
-    string name;
-    void[] m_init;
-    @safe pure nothrow {
-        size_t function(in void*) xtoHash;
-        bool function(in void*, in void*) xopEquals;
-        int function(in void*, in void*) xopCmp;
-        string function(in void*) xtoString;
-    }
-    uint m_flags;
-    union {
-        void function(void*) xdtor;
-        void function(void*, const TypeInfo_Struct) xdtorti;
-    }
-
-    void function(void*) xpostblit;
-    uint align_;
-    immutable(void)* rtinfo;
-    private struct _memberFunc //? Is it necessary
-    {
-        union {
-            struct  // delegate
-            {
-                const void* ptr;
-                const void* funcptr;
-            }
-
-            @safe pure nothrow {
-                bool delegate(in void*) xopEquals;
-                int delegate(in void*) xopCmp;
-            }
-        }
-    }
-
-    enum StructFlags : uint {
-        hasPointers = 0x1,
-        isDynamicType = 0x2, // built at runtime, needs type info in xdtor
-    }
-
-    override string toString() const {
-        return name;
-    }
-
-    override size_t size() const {
-        return m_init.length;
-    }
-
-    override @property uint flags() nothrow pure const @safe @nogc {
-        return m_flags;
-    }
-
-    override size_t toHash() const {
-        return hashOf(this.name);
-    }
-
-    override bool opEquals(Object o) const {
-        if (this is o)
-            return true;
-        auto s = cast(const TypeInfo_Struct) o;
-        return s && this.name == s.name;
-    }
-
-    override size_t getHash(scope const void* p) @trusted pure nothrow const {
-        assert(p);
-        if (xtoHash) {
-            return (*xtoHash)(p);
-        } else {
-            return hashOf(p[0 .. initializer().length]);
-        }
-    }
-
-    override bool equals(in void* p1, in void* p2) @trusted const {
-        import core.stdc.string : memcmp;
-        if (!p1 || !p2)
-            return false;
-        else if (xopEquals)
-            return (*xopEquals)(p1, p2);
-        else if (p1 == p2)
-            return true;
-        else // BUG: relies on the GC not moving objects
-            return memcmp(p1, p2, m_init.length) == 0;
-    }
-
-    override @property size_t talign() nothrow pure const {
-        return align_;
-    }
-
-    final override void destroy(void* p) const {
-        if (xdtor) {
-            if (m_flags & StructFlags.isDynamicType)
-                (*xdtorti)(p, this);
-            else
-                (*xdtor)(p);
-        }
-    }
-
-    override void postblit(void* p) const {
-        if (xpostblit)
-            (*xpostblit)(p);
-    }
-
-    override const(void)[] initializer() nothrow pure const @safe {
-        return m_init;
-    }
 }
 
 extern (C) bool _xopCmp(const void*, const void*) {
@@ -1350,4 +761,571 @@ class Exception : Throwable {
     }
 }
 
-import core.internal.hash;
+
+class TypeInfo {
+    override string toString() const @safe nothrow {
+        return typeid(this).name;
+    }
+
+    const(TypeInfo) next() nothrow pure inout @nogc {
+        return null;
+    }
+
+    size_t size() nothrow pure const @safe @nogc {
+        return 0;
+    }
+
+    bool equals(in void* p1, in void* p2) const {
+        return p1 == p2;
+    }
+
+    override size_t toHash() @trusted const nothrow {
+        return hashOf(this.toString());
+    }
+
+    size_t getHash(scope const void* p) @trusted nothrow const {
+        return hashOf(p);
+    }
+
+    /**
+	* Return default initializer.  If the type should be initialized to all
+	* zeros, an array with a null ptr and a length equal to the type size will
+	* be returned. For static arrays, this returns the default initializer for
+	* a single element of the array, use `tsize` to get the correct size.
+	*/
+    const(void)[] initializer() const @trusted nothrow pure {
+        return (cast(const(void)*) null)[0 .. typeof(null).sizeof];
+    }
+
+    const(OffsetTypeInfo)[] offTi() const {
+        return null;
+    }
+
+    @property uint flags() nothrow pure const @safe @nogc {
+        return 0;
+    }
+    /// Run the destructor on the object and all its sub-objects
+    void destroy(void* p) const {
+    }
+    /// Run the postblit on the object and all its sub-objects
+    void postblit(void* p) const {
+    }
+
+    @property size_t talign() nothrow pure const {
+        return size;
+    }
+}
+
+class TypeInfo_Class : TypeInfo {
+    ubyte[]      m_init;        /** class static initializer
+                                    * (init.length gives size in bytes of class)
+                                    */
+    string      name;           /// class name
+    void*[]     vtbl;           /// virtual function pointer table
+    Interface[] interfaces;     /// interfaces this class implements
+    TypeInfo_Class   base;      /// base class
+    void*       destructor;
+    void function(Object) classInvariant;
+    enum ClassFlags : ushort
+    {
+        isCOMclass = 0x1,
+        noPointers = 0x2,
+        hasOffTi = 0x4,
+        hasCtor = 0x8,
+        hasGetMembers = 0x10,
+        hasTypeInfo = 0x20,
+        isAbstract = 0x40,
+        isCPPclass = 0x80,
+        hasDtor = 0x100,
+        hasNameSig = 0x200,
+    }
+    ClassFlags m_flags;
+    ushort     depth;           /// inheritance distance from Object
+    void*      deallocator;
+    OffsetTypeInfo[] m_offTi;
+    void function(Object) defaultConstructor;   // default Constructor
+    immutable(void)* m_RTInfo;        // data for precise GC
+    uint[4] nameSig;            /// unique signature for `name`
+
+    override @property size_t size() nothrow pure const {
+        return Object.sizeof;
+    }
+
+    override string toString() const pure {
+        return name;
+    }
+
+    override @property const(OffsetTypeInfo)[] offTi() nothrow pure const {
+        return m_offTi;
+    }
+
+    override size_t getHash(scope const void* p) @trusted const {
+        auto o = *cast(Object*) p;
+        return o ? o.toHash() : 0;
+    }
+
+    override bool equals(in void* p1, in void* p2) const {
+        Object o1 = *cast(Object*) p1;
+        Object o2 = *cast(Object*) p2;
+
+        return (o1 is o2) || (o1 && o1.opEquals(o2));
+    }
+
+    override const(void)[] initializer() nothrow pure const @safe {
+        return m_init;
+    }
+}
+
+alias ClassInfo = TypeInfo_Class;
+
+// NOT SUPPORTED
+class TypeInfo_AssociativeArray : TypeInfo { }
+
+class TypeInfo_Pointer : TypeInfo {
+    TypeInfo m_next;
+
+    override bool equals(in void* p1, in void* p2) const {
+        return *cast(void**) p1 == *cast(void**) p2;
+    }
+
+    override size_t getHash(scope const void* p) @trusted const {
+        size_t addr = cast(size_t)*cast(const void**) p;
+        return addr ^ (addr >> 4);
+    }
+
+    override @property size_t size() nothrow pure const {
+        return (void*).sizeof;
+    }
+
+    override const(void)[] initializer() const @trusted {
+        return (cast(void*) null)[0 .. (void*).sizeof];
+    }
+
+    override const(TypeInfo) next() const {
+        return m_next;
+    }
+}
+
+class TypeInfo_Array : TypeInfo {
+    TypeInfo value;
+    override string toString() const {
+        return value.toString() ~ "[]";
+    }
+
+    override size_t size() const {
+        return (void[]).sizeof;
+    }
+
+    override const(TypeInfo) next() const {
+        return value;
+    }
+
+    override bool equals(in void* p1, in void* p2) const {
+        void[] a1 = *cast(void[]*) p1;
+        void[] a2 = *cast(void[]*) p2;
+        if (a1.length != a2.length)
+            return false;
+        size_t sz = value.size;
+        for (size_t i = 0; i < a1.length; i++) {
+            if (!value.equals(a1.ptr + i * sz, a2.ptr + i * sz))
+                return false;
+        }
+        return true;
+    }
+
+    override @property size_t talign() nothrow pure const {
+        return (void[]).alignof;
+    }
+
+    override const(void)[] initializer() const @trusted {
+        return (cast(void*) null)[0 .. (void[]).sizeof];
+    }
+}
+
+class TypeInfo_Tuple : TypeInfo {
+    TypeInfo[] elements;
+}
+
+class TypeInfo_StaticArray : TypeInfo {
+    TypeInfo value;
+    size_t len;
+    override size_t size() const {
+        return value.size * len;
+    }
+
+    override const(TypeInfo) next() const {
+        return value;
+    }
+
+    override bool equals(in void* p1, in void* p2) const {
+        size_t sz = value.size;
+
+        for (size_t u = 0; u < len; u++) {
+            if (!value.equals(p1 + u * sz, p2 + u * sz)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    override @property size_t talign() nothrow pure const {
+        return value.talign;
+    }
+
+}
+
+class TypeInfo_Enum : TypeInfo {
+    TypeInfo base;
+    string name;
+    void[] m_init;
+
+    override size_t size() const {
+        return base.size;
+    }
+
+    override const(TypeInfo) next() const {
+        return base.next;
+    }
+
+    override bool equals(in void* p1, in void* p2) const {
+        return base.equals(p1, p2);
+    }
+
+    override @property size_t talign() const {
+        return base.talign;
+    }
+
+    override void destroy(void* p) const {
+        return base.destroy(p);
+    }
+
+    override void postblit(void* p) const {
+        return base.postblit(p);
+    }
+
+    override const(void)[] initializer() const {
+        return m_init.length ? m_init : base.initializer();
+    }
+}
+
+// typeof(null)
+class TypeInfo_n : TypeInfo {
+const:
+pure:
+@nogc:
+nothrow:
+@safe:
+    override string toString() {
+        return "typeof(null)";
+    }
+
+    override size_t getHash(scope const void*) {
+        return 0;
+    }
+
+    override bool equals(in void*, in void*) {
+        return true;
+    }
+
+    override @property size_t size() {
+        return typeof(null).sizeof;
+    }
+
+    override const(void)[] initializer() @trusted {
+        return (cast(void*) null)[0 .. size_t.sizeof];
+    }
+}
+
+/**
+ * Array of pairs giving the offset and type information for each
+ * member in an aggregate.
+ */
+struct OffsetTypeInfo {
+    size_t offset; /// Offset of member from start of object
+    TypeInfo ti; /// TypeInfo for this member
+}
+
+class TypeInfo_Axa : TypeInfo_Aa {
+
+}
+
+class TypeInfo_Aya : TypeInfo_Aa {
+
+}
+
+class TypeInfo_Function : TypeInfo {
+    override string toString() const pure @trusted {
+        return deco;
+    }
+
+    override bool opEquals(Object o) const {
+        if (this is o)
+            return true;
+        auto c = cast(const TypeInfo_Function) o;
+        return c && this.deco == c.deco;
+    }
+
+    // BUG: need to add the rest of the functions
+
+    override @property size_t size() nothrow pure const {
+        return 0; // no size for functions
+    }
+
+    override const(void)[] initializer() const @safe {
+        return null;
+    }
+
+    TypeInfo _next;
+    override const(TypeInfo) next() nothrow pure inout @nogc {
+        return _next;
+    }
+
+    /**
+    * Mangled function type string
+    */
+    string deco;
+}
+
+class TypeInfo_Delegate : TypeInfo {
+    TypeInfo next;
+    string deco;
+    override @property size_t size() nothrow pure const {
+        alias dg = int delegate();
+        return dg.sizeof;
+    }
+
+    override bool equals(in void* p1, in void* p2) const {
+        auto dg1 = *cast(void delegate()*) p1;
+        auto dg2 = *cast(void delegate()*) p2;
+        return dg1 == dg2;
+    }
+
+    override const(void)[] initializer() const @trusted {
+        return (cast(void*) null)[0 .. (int delegate()).sizeof];
+    }
+
+    override size_t getHash(scope const void* p) @trusted const {
+        return hashOf(*cast(const void delegate()*) p);
+    }
+
+    override @property size_t talign() nothrow pure const {
+        alias dg = int delegate();
+        return dg.alignof;
+    }
+}
+
+//Directly copied from LWDR source.
+class TypeInfo_Interface : TypeInfo {
+    TypeInfo_Class info;
+
+    override bool equals(in void* p1, in void* p2) const {
+        Interface* pi = **cast(Interface***)*cast(void**) p1;
+        Object o1 = cast(Object)(*cast(void**) p1 - pi.offset);
+        pi = **cast(Interface***)*cast(void**) p2;
+        Object o2 = cast(Object)(*cast(void**) p2 - pi.offset);
+
+        return o1 == o2 || (o1 && o1.opCmp(o2) == 0);
+    }
+
+    override size_t getHash(scope const void* p) @trusted const {
+        if (!*cast(void**) p) {
+            return 0;
+        }
+        Interface* pi = **cast(Interface***)*cast(void**) p;
+        Object o = cast(Object)(*cast(void**) p - pi.offset);
+        assert(o);
+        return o.toHash();
+    }
+
+    override const(void)[] initializer() const @trusted {
+        return (cast(void*) null)[0 .. Object.sizeof];
+    }
+
+    override @property size_t size() nothrow pure const {
+        return Object.sizeof;
+    }
+}
+
+class TypeInfo_Const : TypeInfo {
+    override size_t getHash(scope const(void*) p) @trusted const nothrow {
+        return base.getHash(p);
+    }
+
+    TypeInfo base;
+    override size_t size() const {
+        return base.size;
+    }
+
+    override const(TypeInfo) next() const {
+        return base.next;
+    }
+
+    override const(void)[] initializer() nothrow pure const {
+        return base.initializer();
+    }
+
+    override @property size_t talign() nothrow pure const {
+        return base.talign;
+    }
+
+    override bool equals(in void* p1, in void* p2) const {
+        return base.equals(p1, p2);
+    }
+}
+
+/+
+class TypeInfo_Immutable : TypeInfo {
+	size_t getHash(in void*) nothrow { return 0; }
+	TypeInfo base;
+}
++/
+class TypeInfo_Invariant : TypeInfo {
+    TypeInfo base;
+    override size_t getHash(scope const(void*) p) @trusted const nothrow {
+        return base.getHash(p);
+    }
+
+    override size_t size() const {
+        return base.size;
+    }
+
+    override const(TypeInfo) next() const {
+        return base;
+    }
+}
+
+class TypeInfo_Shared : TypeInfo {
+    override size_t getHash(scope const(void*) p) @trusted const nothrow {
+        return base.getHash(p);
+    }
+
+    TypeInfo base;
+    override size_t size() const {
+        return base.size;
+    }
+
+    override const(TypeInfo) next() const {
+        return base;
+    }
+}
+
+class TypeInfo_Inout : TypeInfo {
+    override size_t getHash(scope const(void*) p) @trusted const nothrow {
+        return base.getHash(p);
+    }
+
+    TypeInfo base;
+    override size_t size() const {
+        return base.size;
+    }
+
+    override const(TypeInfo) next() const {
+        return base;
+    }
+}
+
+class TypeInfo_Struct : TypeInfo {
+    string name;
+    void[] m_init;
+    @safe pure nothrow {
+        size_t function(in void*) xtoHash;
+        bool function(in void*, in void*) xopEquals;
+        int function(in void*, in void*) xopCmp;
+        string function(in void*) xtoString;
+    }
+    uint m_flags;
+    union {
+        void function(void*) xdtor;
+        void function(void*, const TypeInfo_Struct) xdtorti;
+    }
+
+    void function(void*) xpostblit;
+    uint align_;
+    immutable(void)* rtinfo;
+    private struct _memberFunc //? Is it necessary
+    {
+        union {
+            struct  // delegate
+            {
+                const void* ptr;
+                const void* funcptr;
+            }
+
+            @safe pure nothrow {
+                bool delegate(in void*) xopEquals;
+                int delegate(in void*) xopCmp;
+            }
+        }
+    }
+
+    enum StructFlags : uint {
+        hasPointers = 0x1,
+        isDynamicType = 0x2, // built at runtime, needs type info in xdtor
+    }
+
+    override string toString() const {
+        return name;
+    }
+
+    override size_t size() const {
+        return m_init.length;
+    }
+
+    override @property uint flags() nothrow pure const @safe @nogc {
+        return m_flags;
+    }
+
+    override size_t toHash() const {
+        return hashOf(this.name);
+    }
+
+    override bool opEquals(Object o) const {
+        if (this is o)
+            return true;
+        auto s = cast(const TypeInfo_Struct) o;
+        return s && this.name == s.name;
+    }
+
+    override size_t getHash(scope const void* p) @trusted pure nothrow const {
+        assert(p);
+        if (xtoHash) {
+            return (*xtoHash)(p);
+        } else {
+            return hashOf(p[0 .. initializer().length]);
+        }
+    }
+
+    override bool equals(in void* p1, in void* p2) @trusted const {
+        import core.stdc.string : memcmp;
+        if (!p1 || !p2)
+            return false;
+        else if (xopEquals)
+            return (*xopEquals)(p1, p2);
+        else if (p1 == p2)
+            return true;
+        else // BUG: relies on the GC not moving objects
+            return memcmp(p1, p2, m_init.length) == 0;
+    }
+
+    override @property size_t talign() nothrow pure const {
+        return align_;
+    }
+
+    final override void destroy(void* p) const {
+        if (xdtor) {
+            if (m_flags & StructFlags.isDynamicType)
+                (*xdtorti)(p, this);
+            else
+                (*xdtor)(p);
+        }
+    }
+
+    override void postblit(void* p) const {
+        if (xpostblit)
+            (*xpostblit)(p);
+    }
+
+    override const(void)[] initializer() nothrow pure const @safe {
+        return m_init;
+    }
+}

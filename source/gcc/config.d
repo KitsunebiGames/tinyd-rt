@@ -22,6 +22,8 @@
 
 module gcc.config;
 
+version(GNU):
+
 // Whether target has support for builtin atomics.
 enum GNU_Have_Atomics = true;
 
