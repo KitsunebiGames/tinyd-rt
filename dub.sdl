@@ -18,5 +18,5 @@ configuration "default" {
 
 // Dreamcast config
 configuration "dreamcast" {
-    dflags "-matomic-model=soft-imask" "-ftls-model=local-exec" "-m4-single-only" platform="gdc"
+    dflags "-matomic-model=soft-imask" "-ftls-model=local-exec" "-m4-single" platform="gdc"
 }
